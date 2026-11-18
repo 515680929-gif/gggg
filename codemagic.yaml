@@ -1,0 +1,65 @@
+workflows:
+  dashla-ios:
+    name: Dashla iOS - Build IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+      vars:
+        XCODE_SCHEME: TitaDashboard
+    scripts:
+      - name: Extract SwiftUI project
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR"
+          test -s TitaDashboard-source.zip
+          rm -rf src
+          mkdir -p src
+          unzip -q TitaDashboard-source.zip -d src
+          test -f "$CM_BUILD_DIR/src/TitaDashboard/project.yml"
+          echo "Source extracted to $CM_BUILD_DIR/src/TitaDashboard"
+      - name: Install XcodeGen
+        script: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+      - name: Generate Xcode project
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/src/TitaDashboard"
+          xcodegen generate
+          test -d TitaDashboard.xcodeproj
+      - name: Archive iOS app (unsigned)
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/src/TitaDashboard"
+          mkdir -p "$CM_BUILD_DIR/build"
+          xcodebuild \
+            -project TitaDashboard.xcodeproj \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/build/TitaDashboard.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+      - name: Package unsigned IPA
+        script: |
+          set -euo pipefail
+          APP_PATH="$(find "$CM_BUILD_DIR/build/TitaDashboard.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "No .app found in archive" >&2
+            exit 1
+          fi
+          mkdir -p "$CM_BUILD_DIR/build/ipa/Payload"
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/build/ipa/Payload/"
+          (cd "$CM_BUILD_DIR/build/ipa" && /usr/bin/zip -qry "$CM_BUILD_DIR/build/Dashla-unsigned.ipa" Payload)
+          test -s "$CM_BUILD_DIR/build/Dashla-unsigned.ipa"
+    artifacts:
+      - build/Dashla-unsigned.ipa
+      - build/TitaDashboard.xcarchive
+      - build/**/*.dSYM
